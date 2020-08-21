@@ -1,0 +1,112 @@
+import time
+import paho.mqtt.client as paho
+import hashlib
+broker="broker.hivemq.com"
+#filename="500kb_photo.jpg"#sending jpg file
+#increasing jpg file size increases round trip time
+filename="mqtt_publisher.py" #file to send
+topic="data/files"
+qos=0 # change the qos according to the necessity
+#higher qos means rtt value is larger because qos=2 needs 4 handshakes.
+data_block_size=2000
+fo=open(filename,"rb")
+fout=open("1out.txt","wb") #use a different filename
+# for outfile as I'm rnning sender and receiver together
+def process_message(message):
+# This is the main receiver code
+   if len(message)==200: #is header or end
+      msg_in=message.decode("utf-8")
+      msg_in=m_in.split(",,")
+      if msg_in[0]=="end": 
+         in_hash_final=in_hash_md5.hexdigest()
+      else:
+         if msg_in[0]!="header":
+            in_hash_md5.update(msg)
+            return True
+         else:
+            return False
+   else:
+      in_hash_md5.update(msg)
+      return True
+#define callback
+def on_message(client, userdata, message):
+   time.sleep(1)
+   if process_message(message.payload):
+      fout.write(message.payload)
+
+def on_publish(client, userdata, mid):
+    client.mid_value=mid
+    client.puback_flag=True  
+
+
+def wait_for(client,msgType,period=0.25,wait_time=40,running_loop=False):
+    client.running_loop=running_loop #if using external loop
+    wcount=0  
+    while True:
+        if msgType=="PUBACK":
+            if client.on_publish:        
+                if client.puback_flag:
+                    return True
+     
+        if not client.running_loop:
+            client.loop(.01)  #check for messages manually
+        time.sleep(period)
+        wcount+=1
+        if wcount>wait_time:
+            print("return from wait loop taken too long")
+            return False
+    return True 
+
+def send_header(filename):
+   header="header"+",,"+filename+",,"
+   header=bytearray(header,"utf-8")
+   header.extend(b','*(200-len(header)))
+   print(header)
+   c_publish(client,topic,header,qos)
+
+def send_end(filename):
+   end="end"+",,"+filename+",,"+out_hash_md5.hexdigest()
+   end=bytearray(end,"utf-8")
+   end.extend(b','*(200-len(end)))
+   print(end)
+   c_publish(client,topic,end,qos)
+
+def c_publish(client,topic,out_message,qos):
+   res,mid=client.publish(topic,out_message,qos)#publish
+   if res==0: #published ok
+      if wait_for(client,"PUBACK",running_loop=True):
+         if mid==client.mid_value:
+            print("match mid ",str(mid))
+            client.puback_flag=False #reset flag
+         else:
+            raise SystemExit("not got correct puback mid so quitting")
+         
+      else:
+         raise SystemExit("not got puback so quitting")
+client= paho.Client("client-001")  #create client object client1.on_publish = on_publish                     
+client.on_message=on_message
+client.on_publish=on_publish
+client.puback_flag=False #use flag in publish ack
+client.mid_value=None
+#############################################################################################
+print("connecting to broker ",broker)
+client.connect(broker)#connect
+client.loop_start() #start loop to process received messages
+print("subscribing ")
+client.subscribe(topic)#subscribe
+time.sleep(2)
+start=time.time()
+print("publishing ")
+send_header(filename)
+count=0
+##hashes
+out_hash_md5 = hashlib.md5()
+in_hash_md5 = hashlib.md5()
+
+time_taken=time.time()-start
+print("took ",time_taken)
+time.sleep(4)
+client.disconnect() #disconnect
+client.loop_stop() #stop loop
+fout.close() #close files
+fo.close()
